@@ -1,4 +1,4 @@
-use std::{env, fs, io::{self, Read, Write}};
+use std::{env, fmt, fs, io::{self, Read, Write}};
 
 #[derive(Clone, Copy, Debug)]
 enum Instruction {
@@ -38,6 +38,16 @@ enum Instruction {
 enum Error {
     MissingLoopOpen(usize),
     MissingLoopEnd(usize),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Error::*;
+        match self {
+            MissingLoopOpen(idx) => write!(f, "`]` at column {} does not have a matching `[`", idx),
+            MissingLoopEnd(cnt) => write!(f, "found {} unclosed `[`", cnt),
+        }
+    }
 }
 
 fn parse(src: &str) -> Result<Vec<Instruction>, Error> {
@@ -81,18 +91,18 @@ fn parse(src: &str) -> Result<Vec<Instruction>, Error> {
     Ok(bf)
 }
 
-fn eval(instructions: &Vec<Instruction>, rdr: &mut impl Read, wtr: &mut impl Write) -> io::Result<()> {
+fn eval(bf: &Vec<Instruction>, rdr: &mut impl Read, wtr: &mut impl Write) -> io::Result<()> {
     let mut tape = [0u8; 64];
     let mut ptr = 0;
     let mut pc = 0;
 
-    while let Some(instr) = instructions.get(pc) {
+    while let Some(instr) = bf.get(pc) {
         use Instruction::*;
         match instr {
             IncPtr => ptr += 1,
             DecPtr => ptr -= 1,
-            IncVal => tape[ptr] += 1,
-            DecVal => tape[ptr] -= 1,
+            IncVal => tape[ptr] = tape[ptr].wrapping_add(1),
+            DecVal => tape[ptr] = tape[ptr].wrapping_sub(1),
             Write  => {
                 wtr.write(&tape[ptr..=ptr])?;
             },
@@ -114,8 +124,6 @@ fn eval(instructions: &Vec<Instruction>, rdr: &mut impl Read, wtr: &mut impl Wri
         }
 
         pc += 1;
-
-        //sleep(Duration::from_millis(100));
     }
 
     Ok(())
@@ -125,12 +133,9 @@ fn main() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     let src = fs::read_to_string(&args[1])
         .map_err(|e| e.to_string())?;
-
     let bf = parse(&src)
-        .map_err(|e| format!("{:?}", e))?;
-
+        .map_err(|e| e.to_string())?;
     eval(&bf, &mut io::stdin(), &mut io::stdout())
-        .map_err(|e| format!("{:?}", e))?;
-
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
