@@ -1,6 +1,11 @@
-use std::{env, fmt, fs, io::{self, Read, Write}};
+mod lexer;
+mod parser;
 
-#[derive(Clone, Copy, Debug)]
+use std::{env, fs, io::{self, Read, Write}};
+
+use crate::{lexer::Lexer, parser::Parser};
+
+#[derive(Debug)]
 enum Instruction {
     /// `>`
     ///
@@ -34,174 +39,128 @@ enum Instruction {
     ///
     /// While the byte at the data pointer is zero, repeat all instructions until the matching `]`.
     /// Otherwise, jump forward to the command after the matching `]`.
-    LoopOpen(usize),
-    LoopEnd(usize),
+    Loop(Vec<Instruction>),
 }
 
-#[derive(Debug)]
-enum Error {
-    MissingLoopOpen(usize),
-    MissingLoopEnd(usize),
+struct Context<'a> {
+    rdr: Box<&'a mut dyn Read>,
+    wtr: Box<&'a mut dyn Write>,
+    tape: [u8; 64],
+    ptr: usize,
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use Error::*;
-        match self {
-            MissingLoopOpen(idx) => write!(f, "`]` at column {} does not have a matching `[`", idx),
-            MissingLoopEnd(cnt) => write!(f, "found {} unclosed `[`", cnt),
-        }
-    }
-}
-
-fn parse(src: &str) -> Result<Vec<Instruction>, Error> {
-    let mut bf = Vec::new();
-    let mut stack = Vec::new();
-    let mut idx = 0;
-
-    for c in src.chars() {
-        use Instruction::*;
-        let instr = match c {
-            '>' => IncPtr,
-            '<' => DecPtr,
-            '+' => IncVal,
-            '-' => DecVal,
-            '.' => Write,
-            ',' => Read,
-            '[' => {
-                stack.push(idx);
-                LoopOpen(0)
-            },
-            ']' => {
-                let open_idx = match stack.pop() {
-                    Some(open_idx) => open_idx,
-                    None => return Err(Error::MissingLoopOpen(idx))
-                };
-
-                bf[open_idx] = LoopOpen(idx);
-                LoopEnd(open_idx)
-            },
-            _ => continue,
-        };
-
-        bf.push(instr);
-        idx += 1;
-    }
-
-    if !stack.is_empty() {
-        return Err(Error::MissingLoopEnd(stack.len()))
-    }
-
-    Ok(bf)
-}
-
-/// Cancel out adjacent increments and decrements
+/// Cancel out adjacent increments and decrements.
 ///
-/// TODO: this does not work, because the pointers become invalid.
-/// Probably easiest if LoopOpen and LoopEnd become a recursive definition instead
-/// E.g., Loop(Vec<Instruction>)
+/// `><`
+/// `<>`
+/// `+-`
+/// `-+`
 fn cancel(bf: &mut Vec<Instruction>) {
-    let mut i = 0;
+    // Go from back to front, to reduce the number of shifts when removing
+    let mut i = bf.len() - 1;
 
-    while i + 1 < bf.len() {
-        let a = bf[i];
-        let b = bf[i + 1];
-
+    while i > 0 {
         use Instruction::*;
-        match (a, b) {
-            (IncPtr, DecPtr) |
-            (DecPtr, IncPtr) |
-            (IncVal, DecVal) |
-            (DecVal, IncVal) => {
-                bf.remove(i + 1);
-                bf.remove(i);
+        if let Loop(instr) = &mut bf[i] {
+            // Recurse
+            cancel(instr);
+            i -= 1;
+        } else {
+            let r = &bf[i];
+            let l = &bf[i - 1];
+            match (l, r) {
+                (IncPtr, DecPtr) |
+                (DecPtr, IncPtr) |
+                (IncVal, DecVal) |
+                (DecVal, IncVal) => {
+                    bf.remove(i);
+                    bf.remove(i - 1);
+                }
+                _ => {
+                    i -= 1;
+                },
             }
-            _ => {
-                i += 1
-            },
         }
     }
 }
 
 /// Replace `[+]` and `[-]` by a single instruction.
-///
-/// TODO: this does not work, because the pointers become invalid.
-/// Probably easiest if LoopOpen and LoopEnd become a recursive definition instead
-/// E.g., Loop(Vec<Instruction>)
 fn clearloop(bf: &mut Vec<Instruction>) {
-    let mut i = 0;
-
-    while i + 2 < bf.len() {
-        let a = bf[i];
-        let b = bf[i + 1];
-        let c = bf[i + 2];
-
+    for x in bf {
         use Instruction::*;
-        match (a, b, c) {
-            (LoopOpen(_), IncVal, LoopEnd(_)) |
-            (LoopOpen(_), DecVal, LoopEnd(_)) => {
-                bf[i] = ClearVal;
-                bf.remove(i + 2);
-                bf.remove(i + 1);
-            }
-            _ => {
-                i += 1;
+        if let Loop(instr) = x {
+            match instr[..] {
+                [IncVal] |
+                [DecVal] => {
+                    *x = ClearVal;
+                },
+                _ => {
+                    // Recurse
+                    clearloop(instr);
+                }
             }
         }
     }
 }
 
-fn eval(bf: &Vec<Instruction>, rdr: &mut impl Read, wtr: &mut impl Write) -> io::Result<()> {
-    let mut tape = [0u8; 64];
-    let mut ptr = 0;
-    let mut pc = 0;
+impl<'a> Context<'a> {
+    fn new(rdr: &'a mut impl Read, wtr: &'a mut impl Write) -> Self {
+        Self {
+            rdr: Box::new(rdr),
+            wtr: Box::new(wtr),
+            tape: [0u8; 64],
+            ptr: 0,
+        }
+    }
 
-    while let Some(instr) = bf.get(pc) {
-        use Instruction::*;
-        match instr {
-            IncPtr => ptr += 1,
-            DecPtr => ptr -= 1,
-            IncVal => tape[ptr] = tape[ptr].wrapping_add(1),
-            DecVal => tape[ptr] = tape[ptr].wrapping_sub(1),
-            ClearVal => tape[ptr] = 0,
-            Write  => {
-                wtr.write(&tape[ptr..=ptr])?;
-            },
-            Read => {
-                let mut input = [0u8; 1];
-                rdr.read_exact(&mut input)?;
-                tape[ptr] = input[0];
-            },
-            LoopOpen(end) => {
-                if tape[ptr] == 0 {
-                    pc = *end;
-                }
-            },
-            LoopEnd(open) => {
-                if tape[ptr] != 0 {
-                    pc = *open;
+    fn eval(&mut self, prog: &Vec<Instruction>) -> io::Result<()> {
+        for instr in prog {
+            use Instruction::*;
+            match instr {
+                IncPtr => self.ptr += 1,
+                DecPtr => self.ptr -= 1,
+                IncVal => self.tape[self.ptr] = self.tape[self.ptr].wrapping_add(1),
+                DecVal => self.tape[self.ptr] = self.tape[self.ptr].wrapping_sub(1),
+                ClearVal => self.tape[self.ptr] = 0,
+                Write  => {
+                    self.wtr.write(&[self.tape[self.ptr]])?;
+                },
+                Read => {
+                    let mut input = [0u8; 1];
+                    self.rdr.read_exact(&mut input)?;
+                    self.tape[self.ptr] = input[0];
+                },
+                Loop(inner) => {
+                    while self.tape[self.ptr] != 0 {
+                        self.eval(inner)?;
+                    }
                 }
             }
         }
 
-        pc += 1;
+        Ok(())
     }
-
-    Ok(())
 }
 
 fn main() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     let src = fs::read_to_string(&args[1])
         .map_err(|e| e.to_string())?;
-    let mut bf = parse(&src)
+
+    // Parse
+    let lexer = Lexer::new(&src);
+    let mut parser = Parser::new(lexer);
+    let mut prog = parser.parse()
         .map_err(|e| e.to_string())?;
 
     // Optimize
-    cancel(&mut bf);
-    clearloop(&mut bf);
+    cancel(&mut prog);
+    clearloop(&mut prog);
 
-    eval(&bf, &mut io::stdin(), &mut io::stdout())
+    let mut rdr = io::stdin();
+    let mut wtr = io::stdout();
+    let mut ctx = Context::new(&mut rdr, &mut wtr);
+    ctx.eval(&mut prog)
         .map_err(|e| e.to_string())?;
 
     Ok(())
