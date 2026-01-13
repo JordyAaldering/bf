@@ -1,12 +1,13 @@
 mod lexer;
 mod parser;
+mod opt;
 
 use std::{env, fs, io::{self, Read, Write}};
 
-use crate::{lexer::Lexer, parser::Parser};
+use crate::{lexer::Lexer, parser::Parser, opt::*};
 
 #[derive(Debug)]
-enum Instruction {
+pub enum Instruction {
     /// `>`
     ///
     /// Increment the data pointer by one.
@@ -23,7 +24,7 @@ enum Instruction {
     ///
     /// Decrement the byte at the data pointer by one.
     DecVal,
-    /// `[-]` or `[+]`
+    /// `[+]` `[-]`
     ///
     /// Reset the byte at the data pointer to zero.
     ClearVal,
@@ -47,60 +48,6 @@ struct Context<'a> {
     wtr: Box<&'a mut dyn Write>,
     tape: [u8; 64],
     ptr: usize,
-}
-
-/// Cancel out adjacent increments and decrements.
-///
-/// `><`
-/// `<>`
-/// `+-`
-/// `-+`
-fn cancel(bf: &mut Vec<Instruction>) {
-    // Go from back to front, to reduce the number of shifts when removing
-    let mut i = bf.len() - 1;
-
-    while i > 0 {
-        use Instruction::*;
-        if let Loop(instr) = &mut bf[i] {
-            // Recurse
-            cancel(instr);
-            i -= 1;
-        } else {
-            let r = &bf[i];
-            let l = &bf[i - 1];
-            match (l, r) {
-                (IncPtr, DecPtr) |
-                (DecPtr, IncPtr) |
-                (IncVal, DecVal) |
-                (DecVal, IncVal) => {
-                    bf.remove(i);
-                    bf.remove(i - 1);
-                }
-                _ => {
-                    i -= 1;
-                },
-            }
-        }
-    }
-}
-
-/// Replace `[+]` and `[-]` by a single instruction.
-fn clearloop(bf: &mut Vec<Instruction>) {
-    for x in bf {
-        use Instruction::*;
-        if let Loop(instr) = x {
-            match instr[..] {
-                [IncVal] |
-                [DecVal] => {
-                    *x = ClearVal;
-                },
-                _ => {
-                    // Recurse
-                    clearloop(instr);
-                }
-            }
-        }
-    }
 }
 
 impl<'a> Context<'a> {
@@ -157,6 +104,7 @@ fn main() -> Result<(), String> {
     cancel(&mut prog);
     clearloop(&mut prog);
 
+    // Interpret
     let mut rdr = io::stdin();
     let mut wtr = io::stdout();
     let mut ctx = Context::new(&mut rdr, &mut wtr);
