@@ -34,10 +34,10 @@ impl<'src> Parser<'src> {
             use Token::*;
             use Instruction::*;
             let instr = match c {
-                Gt    => IncPtr,
-                Lt    => DecPtr,
-                Plus  => IncVal,
-                Minus => DecVal,
+                Gt    => IncPtr(1),
+                Lt    => DecPtr(1),
+                Plus  => IncVal(1),
+                Minus => DecVal(1),
                 Dot   => Write,
                 Comma => Read,
                 LSquare => {
@@ -61,10 +61,10 @@ impl<'src> Parser<'src> {
             use Token::*;
             use Instruction::*;
             let instr = match c {
-                Gt    => IncPtr,
-                Lt    => DecPtr,
-                Plus  => IncVal,
-                Minus => DecVal,
+                Gt    => IncPtr(1),
+                Lt    => DecPtr(1),
+                Plus  => IncVal(1),
+                Minus => DecVal(1),
                 Dot   => Write,
                 Comma => Read,
                 LSquare => {

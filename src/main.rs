@@ -11,19 +11,19 @@ pub enum Instruction {
     /// `>`
     ///
     /// Increment the data pointer by one.
-    IncPtr,
+    IncPtr(usize),
     /// `<`
     ///
     /// Decrement the data pointer by one.
-    DecPtr,
+    DecPtr(usize),
     /// `+`
     ///
     /// Increment the byte at the data pointer by one.
-    IncVal,
+    IncVal(u8),
     /// `-`
     ///
     /// Decrement the byte at the data pointer by one.
-    DecVal,
+    DecVal(u8),
     /// `[+]` `[-]`
     ///
     /// Reset the byte at the data pointer to zero.
@@ -64,10 +64,10 @@ impl<'a> Context<'a> {
         for instr in prog {
             use Instruction::*;
             match instr {
-                IncPtr => self.ptr += 1,
-                DecPtr => self.ptr -= 1,
-                IncVal => self.tape[self.ptr] = self.tape[self.ptr].wrapping_add(1),
-                DecVal => self.tape[self.ptr] = self.tape[self.ptr].wrapping_sub(1),
+                IncPtr(x) => self.ptr += *x,
+                DecPtr(x) => self.ptr -= *x,
+                IncVal(x) => self.tape[self.ptr] = self.tape[self.ptr].wrapping_add(*x),
+                DecVal(x) => self.tape[self.ptr] = self.tape[self.ptr].wrapping_sub(*x),
                 ClearVal => self.tape[self.ptr] = 0,
                 Write  => {
                     self.wtr.write(&[self.tape[self.ptr]])?;

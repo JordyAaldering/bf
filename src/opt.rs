@@ -17,10 +17,13 @@ pub fn cancel(bf: &mut Vec<Instruction>) {
             let r = &bf[i];
             let l = &bf[i - 1];
             match (l, r) {
-                (IncPtr, DecPtr) |
-                (DecPtr, IncPtr) |
-                (IncVal, DecVal) |
-                (DecVal, IncVal) => {
+                (IncPtr(x), DecPtr(y)) |
+                (DecPtr(x), IncPtr(y)) if x == y => {
+                    bf.remove(i);
+                    bf.remove(i - 1);
+                }
+                (IncVal(x), DecVal(y)) |
+                (DecVal(x), IncVal(y)) if x == y => {
                     bf.remove(i);
                     bf.remove(i - 1);
                 }
@@ -39,8 +42,8 @@ pub fn clearloop(bf: &mut Vec<Instruction>) {
         use Instruction::*;
         if let Loop(instr) = x {
             match instr[..] {
-                [IncVal] |
-                [DecVal] => {
+                [IncVal(1)] |
+                [DecVal(1)] => {
                     *x = ClearVal;
                 },
                 _ => {
